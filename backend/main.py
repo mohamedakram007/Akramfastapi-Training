@@ -60,6 +60,11 @@ def home():
     return {"message": "FastAPI CRUD Running"}
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
 @app.get("/dashboard/stats")
 def get_dashboard_stats():
     try:
