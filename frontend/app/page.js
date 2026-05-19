@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FiEdit2,
+  FiGitBranch,
   FiLogIn,
   FiLock,
   FiShield,
@@ -75,8 +76,58 @@ const fetchUsers = async () => apiRequest("/users");
 
 const fetchStats = async () => apiRequest("/dashboard/stats");
 
+const fetchUserTree = async () => apiRequest("/users/tree");
+
+const TreeNode = ({ node, depth = 0 }) => {
+  const isUser = node.type === "user";
+  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+
+  return (
+    <div className={depth === 0 ? "" : "pl-5 sm:pl-7"}>
+      <div className="relative rounded-lg border border-white/10 bg-white/5 p-4">
+        {depth > 0 && (
+          <span
+            aria-hidden="true"
+            className="absolute -left-4 top-6 h-px w-4 bg-emerald-300/50 sm:-left-6 sm:w-6"
+          />
+        )}
+
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-emerald-200">{node.label}</p>
+            {isUser ? (
+              <p className="text-xs text-neutral-300">
+                {node.email} | Age {node.age}
+              </p>
+            ) : (
+              <p className="text-xs uppercase tracking-wide text-neutral-400">
+                {node.count} {node.count === 1 ? "user" : "users"}
+              </p>
+            )}
+          </div>
+
+          {!isUser && (
+            <span className="inline-flex w-fit rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-100">
+              Tree Root
+            </span>
+          )}
+        </div>
+      </div>
+
+      {hasChildren && (
+        <div className="relative ml-3 mt-3 border-l border-dashed border-emerald-300/40 pl-4 sm:ml-4 sm:pl-6">
+          {node.children.map((child) => (
+            <TreeNode key={child.id} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function Home() {
   const [users, setUsers] = useState([]);
+  const [userTree, setUserTree] = useState(null);
   const [stats, setStats] = useState({
     signups: 0,
     logins: 0,
@@ -93,7 +144,8 @@ export default function Home() {
   const [formMessage, setFormMessage] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
   const [apiMessage, setApiMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showGraphView, setShowGraphView] = useState(false);
 
   const loadDashboard = async () => {
     try {
@@ -104,10 +156,22 @@ export default function Home() {
       ]);
       setUsers(usersData);
       setStats(statsData);
+      setUserTree(null);
     } catch (error) {
       setApiMessage(error.message);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const openGraphView = async () => {
+    try {
+      setApiMessage("");
+      const treeData = await fetchUserTree();
+      setUserTree(treeData);
+      setShowGraphView(true);
+    } catch (error) {
+      setApiMessage(error.message);
     }
   };
 
@@ -118,6 +182,12 @@ export default function Home() {
 
   const saveUser = async () => {
     setFormMessage("");
+
+    if (!isSignupFormComplete) {
+      setFormMessage("Enter all the details to add the user.");
+      return;
+    }
+
     setIsSaving(true);
 
     const endpoint = editingId ? `/users/${editingId}` : "/users";
@@ -207,6 +277,10 @@ export default function Home() {
   const isAdminFormComplete =
     adminForm.email.trim() && adminForm.password.trim();
 
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
   return (
     <main className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,#134e4a_0,#111827_38%,#030712_100%)] px-4 py-6 text-white sm:px-8 lg:px-12">
       <section className="mx-auto grid min-h-[calc(100vh-48px)] max-w-7xl overflow-hidden rounded-lg border border-white/15 bg-white/10 shadow-2xl shadow-black/40 backdrop-blur-xl lg:grid-cols-[380px_1fr]">
@@ -281,7 +355,7 @@ export default function Home() {
 
             <button
               className="inline-flex items-center justify-center gap-2 rounded-md bg-white p-3 font-bold text-neutral-950 transition hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-70"
-              disabled={isSaving || isLoading || !isSignupFormComplete}
+              disabled={isSaving || isLoading}
               type="submit"
             >
               {isSaving ? (
@@ -414,6 +488,14 @@ export default function Home() {
                 </div>
                 <button
                   className="inline-flex w-fit items-center justify-center gap-2 rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-neutral-100 transition hover:bg-white/15"
+                  onClick={openGraphView}
+                  type="button"
+                >
+                  <FiGitBranch aria-hidden="true" />
+                  Graph View
+                </button>
+                <button
+                  className="inline-flex w-fit items-center justify-center gap-2 rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-neutral-100 transition hover:bg-white/15"
                   onClick={signOutAdmin}
                   type="button"
                 >
@@ -448,6 +530,28 @@ export default function Home() {
                   <p className="text-xs text-neutral-400">protected view</p>
                 </div>
               </div>
+
+              {showGraphView && userTree && (
+                <div className="mb-5 rounded-lg border border-emerald-300/20 bg-emerald-300/5 p-4 shadow-lg shadow-black/20">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold uppercase tracking-wide text-emerald-300">
+                        Graph View
+                      </p>
+                      <h3 className="text-xl font-bold text-white">All users in one tree</h3>
+                    </div>
+                    <button
+                      className="inline-flex w-fit items-center justify-center rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-neutral-100 transition hover:bg-white/15"
+                      onClick={() => setShowGraphView(false)}
+                      type="button"
+                    >
+                      Close Graph
+                    </button>
+                  </div>
+
+                  <TreeNode node={userTree} />
+                </div>
+              )}
 
               <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-3 [scrollbar-color:#67e8f9_transparent] [scrollbar-width:thin]">
                 <div className="grid gap-3">

@@ -27,6 +27,29 @@ def serialize_user(user):
     }
 
 
+def build_user_tree(users):
+    children = []
+
+    for user in sorted(users, key=lambda item: item["name"].lower()):
+        children.append(
+            {
+                "id": str(user["_id"]),
+                "label": user["name"],
+                "email": user["email"],
+                "age": user["age"],
+                "type": "user"
+            }
+        )
+
+    return {
+        "id": "all-users",
+        "label": "All Users",
+        "type": "root",
+        "count": len(users),
+        "children": children
+    }
+
+
 def database_error_response(error: Exception):
     raise HTTPException(
         status_code=503,
@@ -131,6 +154,16 @@ def get_users():
         database_error_response(error)
 
     return users
+
+
+@app.get("/users/tree")
+def get_user_tree():
+    try:
+        users = list(collection.find())
+    except PyMongoError as error:
+        database_error_response(error)
+
+    return build_user_tree(users)
 
 
 @app.put("/users/{id}")
