@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 import {
+  Background,
+  Controls,
+  MarkerType,
+  ReactFlow,
+  ReactFlowProvider,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import {
   FiEdit2,
   FiGitBranch,
   FiLogIn,
@@ -13,6 +21,7 @@ import {
 } from "react-icons/fi";
 
 const PRODUCTION_API = "https://crudoperations-eh5h.onrender.com";
+const LOCAL_API = "http://127.0.0.1:8000";
 const ADMIN_EMAIL = "akram@gmail.com";
 const ADMIN_PASSWORD = "akram123";
 
@@ -31,7 +40,7 @@ const getApiBase = () => {
     typeof window !== "undefined" &&
     ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
   ) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
+    return LOCAL_API;
   }
 
   return PRODUCTION_API;
@@ -52,7 +61,7 @@ const apiRequest = async (path, options) => {
       throw new Error("The backend or database is taking too long to respond. Check the FastAPI terminal and MongoDB connection.");
     }
 
-    throw new Error("Cannot connect to the FastAPI backend. Start the backend on http://localhost:8000.");
+    throw new Error("Cannot connect to the FastAPI backend. Start the backend on http://127.0.0.1:8000.");
   } finally {
     clearTimeout(timeoutId);
   }
@@ -78,51 +87,144 @@ const fetchStats = async () => apiRequest("/dashboard/stats");
 
 const fetchUserTree = async () => apiRequest("/users/tree");
 
-const TreeNode = ({ node, depth = 0 }) => {
-  const isUser = node.type === "user";
-  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+const AGE_GROUPS = [
+  { id: "under-18", label: "Under 18", test: (age) => age < 18 },
+  { id: "age-18-25", label: "18-25", test: (age) => age >= 18 && age <= 25 },
+  { id: "age-26-plus", label: "26+", test: (age) => age >= 26 },
+];
 
-  return (
-    <div className={depth === 0 ? "" : "pl-5 sm:pl-7"}>
-      <div className="relative rounded-lg border border-white/10 bg-white/5 p-4">
-        {depth > 0 && (
-          <span
-            aria-hidden="true"
-            className="absolute -left-4 top-6 h-px w-4 bg-emerald-300/50 sm:-left-6 sm:w-6"
-          />
-        )}
+const getAgeGroup = (age) =>
+  AGE_GROUPS.find((group) => group.test(age)) ?? AGE_GROUPS[AGE_GROUPS.length - 1];
 
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-emerald-200">{node.label}</p>
-            {isUser ? (
-              <p className="text-xs text-neutral-300">
-                {node.email} | Age {node.age}
-              </p>
-            ) : (
-              <p className="text-xs uppercase tracking-wide text-neutral-400">
-                {node.count} {node.count === 1 ? "user" : "users"}
-              </p>
-            )}
-          </div>
+const createFlowLabel = ({ title, subtitle, accent, type }) => (
+  <div className="min-w-[150px] rounded-xl border border-white/10 bg-[#111827] px-4 py-3 text-left shadow-lg shadow-black/30">
+    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
+      {type}
+    </p>
+    <p
+      className="mt-2 text-sm font-bold"
+      style={{
+        color: accent,
+      }}
+    >
+      {title}
+    </p>
+    {subtitle ? <p className="mt-1 text-xs text-neutral-300">{subtitle}</p> : null}
+  </div>
+);
 
-          {!isUser && (
-            <span className="inline-flex w-fit rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-100">
-              Tree Root
-            </span>
-          )}
-        </div>
-      </div>
+const buildFlowGraph = (treeData) => {
+  if (!treeData?.children?.length) {
+    return {
+      nodes: [
+        {
+          id: "all-users",
+          position: { x: 320, y: 24 },
+          data: {
+            label: createFlowLabel({
+              title: "All Users",
+              subtitle: "No user records yet",
+              accent: "#6ee7b7",
+              type: "Root",
+            }),
+          },
+          style: { background: "transparent", border: "none", padding: 0 },
+        },
+      ],
+      edges: [],
+    };
+  }
 
-      {hasChildren && (
-        <div className="relative ml-3 mt-3 border-l border-dashed border-emerald-300/40 pl-4 sm:ml-4 sm:pl-6">
-          {node.children.map((child) => (
-            <TreeNode key={child.id} node={child} depth={depth + 1} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const groupedUsers = AGE_GROUPS.map((group) => ({
+    ...group,
+    users: [],
+  }));
+
+  treeData.children.forEach((user) => {
+    const matchedGroup = groupedUsers.find((group) => group.test(user.age));
+    matchedGroup.users.push(user);
+  });
+
+  const activeGroups = groupedUsers.filter((group) => group.users.length > 0);
+  const nodes = [
+    {
+      id: "all-users",
+      position: { x: Math.max(activeGroups.length - 1, 0) * 170, y: 24 },
+      data: {
+        label: createFlowLabel({
+          title: treeData.label,
+          subtitle: `${treeData.count} ${treeData.count === 1 ? "user" : "users"}`,
+          accent: "#6ee7b7",
+          type: "Root",
+        }),
+      },
+      style: { background: "transparent", border: "none", padding: 0 },
+    },
+  ];
+  const edges = [];
+
+  activeGroups.forEach((group, groupIndex) => {
+    const groupId = `group-${group.id}`;
+    const x = groupIndex * 340;
+    const y = 190;
+
+    nodes.push({
+      id: groupId,
+      position: { x, y },
+      data: {
+        label: createFlowLabel({
+          title: group.label,
+          subtitle: `${group.users.length} ${group.users.length === 1 ? "user" : "users"}`,
+          accent: "#93c5fd",
+          type: "Age Range",
+        }),
+      },
+      style: { background: "transparent", border: "none", padding: 0 },
+    });
+
+    edges.push({
+      id: `edge-root-${groupId}`,
+      source: "all-users",
+      target: groupId,
+      type: "smoothstep",
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#f87171" },
+      style: { stroke: "#f87171", strokeWidth: 2 },
+    });
+
+    group.users.forEach((user, userIndex) => {
+      const userId = `user-${user.id}`;
+      const columnOffset = (userIndex % 2) * 180;
+      const rowOffset = Math.floor(userIndex / 2) * 130;
+
+      nodes.push({
+        id: userId,
+        position: {
+          x: x - 30 + columnOffset,
+          y: y + 160 + rowOffset,
+        },
+        data: {
+          label: createFlowLabel({
+            title: user.label,
+            subtitle: `${user.email} | Age ${user.age}`,
+            accent: "#f9fafb",
+            type: "User",
+          }),
+        },
+        style: { background: "transparent", border: "none", padding: 0 },
+      });
+
+      edges.push({
+        id: `edge-${groupId}-${userId}`,
+        source: groupId,
+        target: userId,
+        type: "smoothstep",
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#60a5fa" },
+        style: { stroke: "#60a5fa", strokeWidth: 2 },
+      });
+    });
+  });
+
+  return { nodes, edges };
 };
 
 export default function Home() {
@@ -146,6 +248,7 @@ export default function Home() {
   const [apiMessage, setApiMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [showGraphView, setShowGraphView] = useState(false);
+  const flowGraph = buildFlowGraph(userTree);
 
   const loadDashboard = async () => {
     try {
@@ -278,7 +381,38 @@ export default function Home() {
     adminForm.email.trim() && adminForm.password.trim();
 
   useEffect(() => {
-    loadDashboard();
+    let isActive = true;
+
+    const loadInitialDashboard = async () => {
+      try {
+        const [usersData, statsData] = await Promise.all([
+          fetchUsers(),
+          fetchStats(),
+        ]);
+
+        if (!isActive) {
+          return;
+        }
+
+        setUsers(usersData);
+        setStats(statsData);
+        setApiMessage("");
+      } catch (error) {
+        if (isActive) {
+          setApiMessage(error.message);
+        }
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadInitialDashboard();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   return (
@@ -549,7 +683,27 @@ export default function Home() {
                     </button>
                   </div>
 
-                  <TreeNode node={userTree} />
+                  <div className="h-[520px] overflow-hidden rounded-xl border border-white/10 bg-[#0b1220]">
+                    <ReactFlowProvider>
+                      <ReactFlow
+                        nodes={flowGraph.nodes}
+                        edges={flowGraph.edges}
+                        fitView
+                        minZoom={0.45}
+                        maxZoom={1.6}
+                        nodesDraggable
+                        nodesConnectable={false}
+                        elementsSelectable
+                        proOptions={{ hideAttribution: true }}
+                      >
+                        <Background color="#1f2937" gap={20} size={1.2} />
+                        <Controls
+                          className="!border-white/10 !bg-[#111827] !text-white"
+                          showInteractive={false}
+                        />
+                      </ReactFlow>
+                    </ReactFlowProvider>
+                  </div>
                 </div>
               )}
 
