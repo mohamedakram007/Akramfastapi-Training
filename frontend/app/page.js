@@ -243,14 +243,22 @@ export default function Home() {
   const [editingId, setEditingId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSigningInAdmin, setIsSigningInAdmin] = useState(false);
+  const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
   const [formMessage, setFormMessage] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
   const [apiMessage, setApiMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [showGraphView, setShowGraphView] = useState(false);
   const flowGraph = buildFlowGraph(userTree);
 
-  const loadDashboard = async () => {
+  const loadDashboard = async ({ showPageLoader = false } = {}) => {
+    if (showPageLoader) {
+      setIsInitialLoading(true);
+    } else {
+      setIsRefreshingDashboard(true);
+    }
+
     try {
       setApiMessage("");
       const [usersData, statsData] = await Promise.all([
@@ -263,7 +271,11 @@ export default function Home() {
     } catch (error) {
       setApiMessage(error.message);
     } finally {
-      setIsLoading(false);
+      if (showPageLoader) {
+        setIsInitialLoading(false);
+      } else {
+        setIsRefreshingDashboard(false);
+      }
     }
   };
 
@@ -349,6 +361,8 @@ export default function Home() {
       return;
     }
 
+    setIsSigningInAdmin(true);
+
     try {
       const data = await apiRequest("/login", {
         method: "POST",
@@ -367,6 +381,8 @@ export default function Home() {
       await loadDashboard();
     } catch (error) {
       setAdminMessage(error.message);
+    } finally {
+      setIsSigningInAdmin(false);
     }
   };
 
@@ -385,25 +401,10 @@ export default function Home() {
 
     const loadInitialDashboard = async () => {
       try {
-        const [usersData, statsData] = await Promise.all([
-          fetchUsers(),
-          fetchStats(),
-        ]);
-
-        if (!isActive) {
-          return;
-        }
-
-        setUsers(usersData);
-        setStats(statsData);
-        setApiMessage("");
-      } catch (error) {
-        if (isActive) {
-          setApiMessage(error.message);
-        }
+        await loadDashboard({ showPageLoader: true });
       } finally {
-        if (isActive) {
-          setIsLoading(false);
+        if (!isActive) {
+          setIsInitialLoading(false);
         }
       }
     };
@@ -446,7 +447,7 @@ export default function Home() {
 
             <input
               className="rounded-md border border-white/10 bg-white/10 p-3 outline-none transition focus:border-emerald-300"
-              disabled={isSaving || isLoading}
+              disabled={isSaving || isInitialLoading || isRefreshingDashboard}
               placeholder="Name"
               value={form.name}
               onChange={(event) =>
@@ -459,7 +460,7 @@ export default function Home() {
             />
             <input
               className="rounded-md border border-white/10 bg-white/10 p-3 outline-none transition focus:border-emerald-300"
-              disabled={isSaving || isLoading}
+              disabled={isSaving || isInitialLoading || isRefreshingDashboard}
               placeholder="Email"
               type="email"
               value={form.email}
@@ -473,7 +474,7 @@ export default function Home() {
             />
             <input
               className="rounded-md border border-white/10 bg-white/10 p-3 outline-none transition focus:border-emerald-300"
-              disabled={isSaving || isLoading}
+              disabled={isSaving || isInitialLoading || isRefreshingDashboard}
               min="1"
               placeholder="Age"
               type="number"
@@ -489,7 +490,7 @@ export default function Home() {
 
             <button
               className="inline-flex items-center justify-center gap-2 rounded-md bg-white p-3 font-bold text-neutral-950 transition hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-70"
-              disabled={isSaving || isLoading}
+              disabled={isSaving || isInitialLoading || isRefreshingDashboard}
               type="submit"
             >
               {isSaving ? (
@@ -538,7 +539,7 @@ export default function Home() {
             </p>
           )}
 
-          {isLoading && (
+          {isInitialLoading && (
             <div className="m-auto max-w-md text-center">
               <p className="text-lg font-bold">Loading dashboard...</p>
               <p className="mt-2 text-sm text-neutral-300">
@@ -547,7 +548,7 @@ export default function Home() {
             </div>
           )}
 
-          {!isLoading && !isAdmin && (
+          {!isInitialLoading && !isAdmin && (
             <form
               className="m-auto w-full max-w-md rounded-lg border border-white/10 bg-white/10 p-6 shadow-2xl shadow-black/30"
               onSubmit={(event) => {
@@ -601,17 +602,21 @@ export default function Home() {
                 />
                 <button
                   className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-300 p-3 font-bold text-neutral-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!isAdminFormComplete}
+                  disabled={!isAdminFormComplete || isSigningInAdmin}
                   type="submit"
                 >
-                  <FiLogIn aria-hidden="true" />
-                  Sign in as admin
+                  {isSigningInAdmin ? (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-500 border-t-neutral-950" />
+                  ) : (
+                    <FiLogIn aria-hidden="true" />
+                  )}
+                  {isSigningInAdmin ? "Checking admin access..." : "Sign in as admin"}
                 </button>
               </div>
             </form>
           )}
 
-          {!isLoading && isAdmin && (
+          {!isInitialLoading && isAdmin && (
             <>
               <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -619,6 +624,11 @@ export default function Home() {
                     Admin Dashboard
                   </p>
                   <h2 className="text-2xl font-bold">All Users</h2>
+                  {isRefreshingDashboard && (
+                    <p className="mt-1 text-xs uppercase tracking-wide text-emerald-300">
+                      Refreshing dashboard...
+                    </p>
+                  )}
                 </div>
                 <button
                   className="inline-flex w-fit items-center justify-center gap-2 rounded-md border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-neutral-100 transition hover:bg-white/15"
