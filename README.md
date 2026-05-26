@@ -76,6 +76,11 @@ Example:
 
 ```env
 MONGO_URL=mongodb://localhost:27017
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=change-this-password
+ADMIN_TOKEN_SECRET=replace-with-a-long-random-secret
+ADMIN_TOKEN_EXPIRES_SECONDS=43200
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
 Frontend local override:
@@ -89,6 +94,13 @@ Example:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+## Authentication Behavior
+
+- `POST /users` stays public for signup creation.
+- `GET /users`, `GET /users/tree`, `GET /dashboard/stats`, `PUT /users/{id}`, and `DELETE /users/{id}` now require admin login.
+- Admin login is verified by FastAPI on the backend.
+- The frontend stores the returned admin token in browser local storage and sends it with protected requests.
 
 ## VS Code Tasks
 

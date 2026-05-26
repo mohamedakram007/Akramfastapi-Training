@@ -3,3 +3,8 @@ __pycache__/
 .env
 node_modules/
 .next/
+backend/.pydeps/
+backend/uvicorn.err.log
+backend/uvicorn.out.log
+frontend/tmp_token.txt
+frontend/tmp_token2.txt

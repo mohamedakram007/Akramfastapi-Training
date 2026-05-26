@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -22,8 +22,7 @@ import {
 
 const PRODUCTION_API = "https://crudoperations-eh5h.onrender.com";
 const LOCAL_API = "http://127.0.0.1:8000";
-const ADMIN_EMAIL = "akram@gmail.com";
-const ADMIN_PASSWORD = "akram123";
+const ADMIN_TOKEN_KEY = "akramfastapi_admin_token";
 
 const emptyForm = {
   name: "",
@@ -46,22 +45,31 @@ const getApiBase = () => {
   return PRODUCTION_API;
 };
 
-const apiRequest = async (path, options) => {
+const apiRequest = async (path, options = {}) => {
   let res;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
   try {
+    const headers = {
+      ...(options.headers ?? {}),
+    };
+
     res = await fetch(`${getApiBase()}${path}`, {
       ...options,
+      headers,
       signal: controller.signal,
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new Error("The backend or database is taking too long to respond. Check the FastAPI terminal and MongoDB connection.");
+      throw new Error(
+        "The backend or database is taking too long to respond. Check the FastAPI terminal and MongoDB connection.",
+      );
     }
 
-    throw new Error("Cannot connect to the FastAPI backend. Start the backend on http://127.0.0.1:8000.");
+    throw new Error(
+      "Cannot connect to the FastAPI backend. Start the backend on http://127.0.0.1:8000.",
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -75,26 +83,40 @@ const apiRequest = async (path, options) => {
   }
 
   if (!res.ok) {
-    throw new Error(data?.detail || data?.error || "The backend returned an error.");
+    const error = new Error(data?.detail || data?.error || "The backend returned an error.");
+    error.status = res.status;
+    throw error;
   }
 
   return data;
 };
 
-const fetchUsers = async () => apiRequest("/users");
+const fetchUsers = async (token) =>
+  apiRequest("/users", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
 
-const fetchStats = async () => apiRequest("/dashboard/stats");
+const fetchStats = async (token) =>
+  apiRequest("/dashboard/stats", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
 
-const fetchUserTree = async () => apiRequest("/users/tree");
+const fetchUserTree = async (token) =>
+  apiRequest("/users/tree", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
 
 const AGE_GROUPS = [
   { id: "under-18", label: "Under 18", test: (age) => age < 18 },
   { id: "age-18-25", label: "18-25", test: (age) => age >= 18 && age <= 25 },
   { id: "age-26-plus", label: "26+", test: (age) => age >= 26 },
 ];
-
-const getAgeGroup = (age) =>
-  AGE_GROUPS.find((group) => group.test(age)) ?? AGE_GROUPS[AGE_GROUPS.length - 1];
 
 const createFlowLabel = ({ title, subtitle, accent, type }) => (
   <div className="min-w-[150px] rounded-xl border border-white/10 bg-[#111827] px-4 py-3 text-left shadow-lg shadow-black/30">
@@ -233,26 +255,57 @@ export default function Home() {
   const [stats, setStats] = useState({
     signups: 0,
     logins: 0,
-    authenticationRequired: false,
+    authenticationRequired: true,
   });
   const [form, setForm] = useState(emptyForm);
-  const [adminForm, setAdminForm] = useState({
-    email: "",
-    password: "",
-  });
   const [editingId, setEditingId] = useState(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [authToken, setAuthToken] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isSigningInAdmin, setIsSigningInAdmin] = useState(false);
   const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
   const [formMessage, setFormMessage] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
   const [apiMessage, setApiMessage] = useState("");
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [showGraphView, setShowGraphView] = useState(false);
+  const isAdmin = Boolean(authToken);
+  const adminEmailInputRef = useRef(null);
+  const adminPasswordInputRef = useRef(null);
+  const restoredTokenRef = useRef(false);
+  const loadDashboardRef = useRef(null);
   const flowGraph = buildFlowGraph(userTree);
 
-  const loadDashboard = async ({ showPageLoader = false } = {}) => {
+  const clearAdminSession = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
+
+    setAuthToken("");
+    setUsers([]);
+    setUserTree(null);
+    setStats({
+      signups: 0,
+      logins: 0,
+      authenticationRequired: true,
+    });
+  };
+
+  const handleProtectedRequestError = (error) => {
+    if (error.status === 401) {
+      clearAdminSession();
+      setAdminMessage("Your admin session expired. Please sign in again.");
+      setApiMessage("");
+      return true;
+    }
+
+    return false;
+  };
+
+  const loadDashboard = async (token, { showPageLoader = false } = {}) => {
+    if (!token) {
+      return;
+    }
+
     if (showPageLoader) {
       setIsInitialLoading(true);
     } else {
@@ -262,14 +315,16 @@ export default function Home() {
     try {
       setApiMessage("");
       const [usersData, statsData] = await Promise.all([
-        fetchUsers(),
-        fetchStats(),
+        fetchUsers(token),
+        fetchStats(token),
       ]);
       setUsers(usersData);
       setStats(statsData);
       setUserTree(null);
     } catch (error) {
-      setApiMessage(error.message);
+      if (!handleProtectedRequestError(error)) {
+        setApiMessage(error.message);
+      }
     } finally {
       if (showPageLoader) {
         setIsInitialLoading(false);
@@ -280,13 +335,20 @@ export default function Home() {
   };
 
   const openGraphView = async () => {
+    if (!authToken) {
+      setApiMessage("Admin authentication is required.");
+      return;
+    }
+
     try {
       setApiMessage("");
-      const treeData = await fetchUserTree();
+      const treeData = await fetchUserTree(authToken);
       setUserTree(treeData);
       setShowGraphView(true);
     } catch (error) {
-      setApiMessage(error.message);
+      if (!handleProtectedRequestError(error)) {
+        setApiMessage(error.message);
+      }
     }
   };
 
@@ -303,6 +365,11 @@ export default function Home() {
       return;
     }
 
+    if (editingId && !authToken) {
+      setFormMessage("Admin authentication is required to edit a user.");
+      return;
+    }
+
     setIsSaving(true);
 
     const endpoint = editingId ? `/users/${editingId}` : "/users";
@@ -313,6 +380,7 @@ export default function Home() {
         method,
         headers: {
           "Content-Type": "application/json",
+          ...(editingId ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({
           ...form,
@@ -320,23 +388,39 @@ export default function Home() {
         }),
       });
       resetSignupForm();
-      await loadDashboard();
+
+      if (authToken) {
+        await loadDashboard(authToken);
+      }
+
       setFormMessage(editingId ? "Signup updated successfully." : "Signup added successfully.");
     } catch (error) {
-      setFormMessage(error.message);
+      if (!handleProtectedRequestError(error)) {
+        setFormMessage(error.message);
+      }
     } finally {
       setIsSaving(false);
     }
   };
 
   const deleteUser = async (id) => {
+    if (!authToken) {
+      setApiMessage("Admin authentication is required.");
+      return;
+    }
+
     try {
       await apiRequest(`/users/${id}`, {
         method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
       });
-      await loadDashboard();
+      await loadDashboard(authToken);
     } catch (error) {
-      setApiMessage(error.message);
+      if (!handleProtectedRequestError(error)) {
+        setApiMessage(error.message);
+      }
     }
   };
 
@@ -350,35 +434,32 @@ export default function Home() {
     setEditingId(user.id);
   };
 
-  const signInAdmin = async () => {
+  const signInAdmin = async (credentials) => {
     setAdminMessage("");
-
-    if (
-      adminForm.email.trim().toLowerCase() !== ADMIN_EMAIL ||
-      adminForm.password !== ADMIN_PASSWORD
-    ) {
-      setAdminMessage("Invalid admin email or password.");
-      return;
-    }
 
     setIsSigningInAdmin(true);
 
     try {
       const data = await apiRequest("/login", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(credentials),
       });
 
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+      }
+
+      setAuthToken(data.token);
       setStats((currentStats) => ({
         ...currentStats,
         logins: data.logins,
         authenticationRequired: data.authenticationRequired,
       }));
-      setIsAdmin(true);
-      setAdminForm({
-        email: "",
-        password: "",
-      });
-      await loadDashboard();
+      setIsInitialLoading(true);
+      void loadDashboard(data.token, { showPageLoader: true });
     } catch (error) {
       setAdminMessage(error.message);
     } finally {
@@ -386,35 +467,69 @@ export default function Home() {
     }
   };
 
+  const handleAdminSignIn = () => {
+    const credentials = {
+      email: adminEmailInputRef.current?.value?.trim?.() ?? "",
+      password: adminPasswordInputRef.current?.value ?? "",
+    };
+
+    if (!credentials.email || !credentials.password) {
+      setAdminMessage("Enter both admin email and password.");
+      return;
+    }
+
+    signInAdmin(credentials);
+  };
+
   const signOutAdmin = () => {
-    setIsAdmin(false);
+    clearAdminSession();
     resetSignupForm();
+    setAdminMessage("");
+    setApiMessage("");
+    setShowGraphView(false);
   };
 
   const isSignupFormComplete =
     form.name.trim() && form.email.trim() && String(form.age).trim();
-  const isAdminFormComplete =
-    adminForm.email.trim() && adminForm.password.trim();
 
   useEffect(() => {
-    let isActive = true;
+    loadDashboardRef.current = loadDashboard;
+  });
 
-    const loadInitialDashboard = async () => {
+  useEffect(() => {
+    if (restoredTokenRef.current) {
+      return undefined;
+    }
+
+    restoredTokenRef.current = true;
+
+    const timeoutId = window.setTimeout(() => {
       try {
-        await loadDashboard({ showPageLoader: true });
-      } finally {
-        if (!isActive) {
-          setIsInitialLoading(false);
+        const storedToken = window.localStorage?.getItem(ADMIN_TOKEN_KEY) || "";
+
+        if (storedToken) {
+          setAuthToken(storedToken);
+          setIsInitialLoading(true);
         }
+      } catch {
+        setAuthToken("");
       }
-    };
+    }, 0);
 
-    loadInitialDashboard();
-
-    return () => {
-      isActive = false;
-    };
+    return () => window.clearTimeout(timeoutId);
   }, []);
+
+  useEffect(() => {
+    if (!authToken) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadDashboardRef.current?.(authToken, { showPageLoader: true });
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [authToken]);
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,#134e4a_0,#111827_38%,#030712_100%)] px-4 py-6 text-white sm:px-8 lg:px-12">
@@ -549,13 +664,7 @@ export default function Home() {
           )}
 
           {!isInitialLoading && !isAdmin && (
-            <form
-              className="m-auto w-full max-w-md rounded-lg border border-white/10 bg-white/10 p-6 shadow-2xl shadow-black/30"
-              onSubmit={(event) => {
-                event.preventDefault();
-                signInAdmin();
-              }}
-            >
+            <div className="m-auto w-full max-w-md rounded-lg border border-white/10 bg-white/10 p-6 shadow-2xl shadow-black/30">
               <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-300/15 text-emerald-200">
                 <FiShield aria-hidden="true" />
               </div>
@@ -576,34 +685,33 @@ export default function Home() {
               <div className="grid gap-3">
                 <input
                   className="rounded-md border border-white/10 bg-white/10 p-3 outline-none transition focus:border-emerald-300"
+                  autoComplete="username"
+                  name="adminEmail"
                   placeholder="Admin email"
+                  ref={adminEmailInputRef}
                   type="email"
-                  value={adminForm.email}
-                  onChange={(event) =>
-                    setAdminForm({
-                      ...adminForm,
-                      email: event.target.value,
-                    })
-                  }
                   required
                 />
                 <input
                   className="rounded-md border border-white/10 bg-white/10 p-3 outline-none transition focus:border-emerald-300"
+                  autoComplete="current-password"
+                  name="adminPassword"
                   placeholder="Admin password"
+                  ref={adminPasswordInputRef}
                   type="password"
-                  value={adminForm.password}
-                  onChange={(event) =>
-                    setAdminForm({
-                      ...adminForm,
-                      password: event.target.value,
-                    })
-                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleAdminSignIn();
+                    }
+                  }}
                   required
                 />
                 <button
                   className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-300 p-3 font-bold text-neutral-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!isAdminFormComplete || isSigningInAdmin}
-                  type="submit"
+                  disabled={isSigningInAdmin}
+                  onClick={handleAdminSignIn}
+                  type="button"
                 >
                   {isSigningInAdmin ? (
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-500 border-t-neutral-950" />
@@ -613,7 +721,7 @@ export default function Home() {
                   {isSigningInAdmin ? "Checking admin access..." : "Sign in as admin"}
                 </button>
               </div>
-            </form>
+            </div>
           )}
 
           {!isInitialLoading && isAdmin && (
@@ -670,8 +778,8 @@ export default function Home() {
                     <FiShield aria-hidden="true" />
                   </div>
                   <p className="text-sm text-neutral-300">Authentication</p>
-                  <p className="text-xl font-bold">Admin Unlocked</p>
-                  <p className="text-xs text-neutral-400">protected view</p>
+                  <p className="text-xl font-bold">Admin Protected</p>
+                  <p className="text-xs text-neutral-400">server-verified access</p>
                 </div>
               </div>
 
